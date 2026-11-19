@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XLSX → UNESS (QTI) : convertisseur de banques de QCM</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+  :root { --bleu:#1a4b8c; --bleu2:#2b6cb0; --ok:#2f9e44; --warn:#e8590c; --fond:#f4f6f9; }
+  * { box-sizing:border-box; }
+  body { font-family:"Segoe UI", system-ui, sans-serif; margin:0; background:var(--fond); color:#222; }
+  header { background:var(--bleu); color:#fff; padding:24px 18px; }
+  header h1 { margin:0 0 6px; font-size:1.4em; }
+  header p { margin:0; opacity:.85; font-size:.95em; }
+  main { max-width:980px; margin:0 auto; padding:22px 16px 60px; }
+  .card { background:#fff; border:1px solid #dde3ec; border-radius:10px; padding:18px; margin-bottom:18px; box-shadow:0 1px 3px rgba(0,0,0,.04); }
+  h2 { font-size:1.05em; margin:0 0 12px; color:var(--bleu); }
+  #drop { border:2px dashed #b8c4d8; border-radius:10px; padding:34px; text-align:center; color:#5a6b85; cursor:pointer; transition:.15s; background:#fafbfd; }
+  #drop.over { border-color:var(--bleu2); background:#eef4fd; }
+  #drop strong { color:var(--bleu); }
+  label { display:block; font-size:.9em; margin:14px 0 4px; color:#333; }
+  input[type=text], select { width:100%; padding:8px 10px; border:1px solid #c6d0e0; border-radius:6px; font-size:.95em; }
+  button.action { background:var(--bleu2); border:none; color:#fff; padding:11px 20px; border-radius:7px; font-size:1em; cursor:pointer; }
+  button.action:disabled { background:#9db3cf; cursor:not-allowed; }
+  table { width:100%; border-collapse:collapse; font-size:.88em; margin-top:10px; }
+  th, td { border:1px solid #dde3ec; padding:6px 8px; text-align:left; vertical-align:top; }
+  th { background:#eef2f8; position:sticky; top:0; }
+  td.num { color:#777; white-space:nowrap; }
+  .reponse { color:var(--ok); font-weight:600; }
+  .warn { color:var(--warn); font-weight:600; }
+  #messages { font-size:.92em; }
+  .note { font-size:.85em; color:#667; margin-top:8px; }
+  #apercuWrap { max-height:420px; overflow:auto; border:1px solid #dde3ec; border-radius:8px; }
+  footer { text-align:center; font-size:.8em; color:#889; padding:20px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Convertisseur XLSX → UNESS (QTI 2.1)</h1>
+  <p>Banque de QCM au format Excel (Wooclap : Type, Title, Correct, Choice…) → archive ZIP importable dans UNESS. Tout se passe dans votre navigateur, aucun fichier n'est envoyé sur un serveur.</p>
+</header>
+<main>
+
+  <div class="card">
+    <h2>1. Charger le fichier Excel</h2>
+    <div id="drop">
+      Glissez ici votre fichier <strong>.xlsx</strong><br>
+      (ou cliquez pour parcourir)<br>
+      <input type="file" id="file" accept=".xlsx,.xls" hidden>
+    </div>
+    <div id="messages" style="margin-top:10px;"></div>
+  </div>
+
+  <div class="card" id="params" style="display:none;">
+    <h2>2. Paramètres de l'export</h2>
+    <label>Feuille à convertir</label>
+    <select id="feuille"></select>
+    <label>Titre de la section (visible dans UNESS)</label>
+    <input type="text" id="titre" value="Banque de questions">
+    <p class="note">La colonne <b>Correct</b> peut contenir : le texte exact de la bonne proposition, son numéro (ex. 3) ou sa lettre (ex. B). Si elle est vide, la 1re proposition est retenue et signalée en orange.</p>
+  </div>
+
+  <div class="card" id="apercu" style="display:none;">
+    <h2>3. Aperçu des questions</h2>
+    <div id="apercuWrap">
+      <table id="tableau"><thead><tr><th>N°</th><th>Énoncé</th><th>Propositions (bonne réponse en vert)</th></tr></thead><tbody></tbody></table>
+    </div>
+  </div>
+
+  <div class="card" id="export" style="display:none;">
+    <h2>4. Générer l'archive UNESS</h2>
+    <button class="action" id="go">⬇ Télécharger le ZIP QTI (UNESS)</button>
+    <p class="note">L'archive contient un fichier XML par question + <code>pool.xml</code> (format identique à un export Theia, validé pour l'import QTI dans UNESS).</p>
+  </div>
+
+</main>
+<footer>xlsx2uness — utilisation libre · format QTI 2.1 (IMS Global) · le fichier ne quitte jamais votre ordinateur</footer>
+
+<script>
+"use strict";
+/* ===== utilitaires ===== */
+const $ = (id) => document.getElementById(id);
+const norm = (s) => String(s ?? "").replace(/\s+/g, " ").trim();
+const escapeXml = (s) => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&apos;");
+const escapeHtml = (s) => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+
+/* ===== détection de la bonne réponse (colonne Correct) ===== */
+function findCorrect(raw, choices) {
+  raw = norm(raw);
+  if (!raw) return 0;
+  for (let i = 0; i < choices.length; i++) if (norm(choices[i]) === raw) return i;
+  if (/^\d+$/.test(raw)) { const idx = parseInt(raw, 10) - 1; if (idx >= 0 && idx < choices.length) return idx; }
+  if (/^[A-Za-z]$/.test(raw)) { const idx = raw.toUpperCase().charCodeAt(0) - 65; if (idx >= 0 && idx < choices.length) return idx; }
+  for (let i = 0; i < choices.length; i++) if (raw.length >= 5 && choices[i].toLowerCase().includes(raw.toLowerCase())) return i;
+  return 0;
+}
+
+/* ===== parse la feuille en questions ===== */
+function sheetToQuestions(rows) {
+  if (!rows || rows.length < 2) return [];
+  const header = (rows[0] || []).map(h => norm(h).toLowerCase());
+  let titleCol = null, correctCol = null, choiceCols = [];
+  header.forEach((h, i) => {
+    if (["title","question","titre","énoncé","enonce","sujet"].includes(h)) titleCol = i;
+    else if (["correct","correct answer","réponse","reponse","bonne réponse","bonne reponse"].includes(h)) correctCol = i;
+    else if (h.startsWith("choice") || h.startsWith("choix") || h.startsWith("option")) choiceCols.push(i);
+  });
+  if (titleCol === null) { titleCol = 1; correctCol = 2; choiceCols = [3,4,5,6,7]; }
+  if (correctCol === null) correctCol = 2;
+  if (!choiceCols.length) {
+    choiceCols = [];
+    for (let i = Math.max(titleCol, correctCol) + 1; i < Math.max(...header.length, 8); i++) choiceCols.push(i);
+  }
+  const qs = [];
+  for (let r = 1; r < rows.length; r++) {
+    const line = rows[r] || [];
+    const title = norm(line[titleCol]);
+    const choices = choiceCols.map(i => norm(line[i])).filter(Boolean);
+    if (!title || choices.length < 2) continue;
+    const raw = correctCol < line.length ? norm(line[correctCol]) : "";
+    qs.push({ title, choices, correct: findCorrect(raw, choices), warn: raw === "" });
+  }
+  return qs;
+}
+
+/* ===== génération QTI (modèles identiques à l'export Theia/UNESS validé) ===== */
+function questionXml(num, title, choices, ci) {
+  const qid = "SINGLECHOICE_QUESTION_9000" + String(num).padStart(5, "0");
+  const cids = choices.map((_, j) => "CHOICE_159" + String(num * 100 + j).padStart(6, "0"));
+  const xml =
+`<?xml version="1.0" encoding="UTF-8"?>
+<assessmentItem xmlns="http://www.imsglobal.org/xsd/imsqti_v2p1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" identifier="${qid}" title="Q${num}" timeDependent="false" adaptive="false" toolName="Theia" xsi:schemaLocation="http://www.imsglobal.org/xsd/imsqti_v2p1 http://www.imsglobal.org/xsd/qti/qtiv2p1/imsqti_v2p1.xsd">
+  <responseDeclaration identifier="RESPONSE" cardinality="single" baseType="identifier">
+    <correctResponse>
+      <value>${cids[ci]}</value>
+    </correctResponse>
+  </responseDeclaration>
+  <outcomeDeclaration identifier="SCORE" cardinality="single" baseType="integer">
+    <defaultValue>
+      <value>0</value>
+    </defaultValue>
+  </outcomeDeclaration>
+  <itemBody>
+    <choiceInteraction responseIdentifier="${qid}" maxChoices="1">
+      <prompt>
+        <div>${escapeXml("<p>" + title + "</p>")}</div>
+      </prompt>
+${choices.map((ch, j) => `      <simpleChoice identifier="${cids[j]}">
+        <div>${escapeXml("<p>" + ch + "</p>")}</div>
+      </simpleChoice>`).join("\n")}
+    </choiceInteraction>
+  </itemBody>
+</assessmentItem>
+`;
+  return { qid, xml };
+}
+
+function poolXml(qids, title) {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<testPart xmlns="http://www.imsglobal.org/xsd/imsqti_v2p1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" identifier="DLPOOL_IMPORT" navigationMode="nonlinear" submissionMode="individual" xsi:schemaLocation="http://www.imsglobal.org/xsd/imsqti_v2p1 http://www.imsglobal.org/xsd/qti/qtiv2p1/imsqti_v2p1.xsd">
+  <assessmentSection identifier="DLPOOL_SECTION_IMPORT" required="false" fixed="false" title="${escapeXml(title)}" visible="true" keepTogether="true">
+${qids.map(q => `    <assessmentItemRef identifier="${q}" required="true" fixed="false" href="${q}.xml">
+      <weight identifier="WEIGHT" value="1"/>
+    </assessmentItemRef>`).join("\n")}
+  </assessmentSection>
+</testPart>
+`;
+}
+
+/* ===== état ===== */
+let workbook = null;   // classeur XLSX
+let fichier = "";      // nom du fichier
+
+/* ===== interface ===== */
+$("drop").addEventListener("click", () => $("file").click());
+$("file").addEventListener("change", e => { if (e.target.files[0]) lire(e.target.files[0]); });
+["dragover","dragenter"].forEach(ev => $("drop").addEventListener(ev, e => { e.preventDefault(); $("drop").classList.add("over"); }));
+["dragleave","drop"].forEach(ev => $("drop").addEventListener(ev, e => { e.preventDefault(); $("drop").classList.remove("over"); }));
+$("drop").addEventListener("drop", e => { if (e.dataTransfer.files[0]) lire(e.dataTransfer.files[0]); });
+$("feuille").addEventListener("change", afficher);
+$("go").addEventListener("click", generer);
+
+function msg(html) { $("messages").innerHTML = html; }
+
+function lire(file) {
+  fichier = file.name;
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    try {
+      workbook = XLSX.read(new Uint8Array(ev.target.result), { type: "array" });
+      const sel = $("feuille");
+      sel.innerHTML = workbook.SheetNames.map(n => `<option value="${n}">${n}</option>`).join("");
+      // pré-sélectionner la feuille "Questions" si présente
+      const q = workbook.SheetNames.find(n => n.toLowerCase().startsWith("question"));
+      if (q) sel.value = q;
+      $("titre").value = fichier.replace(/\.xlsx?$/i, "").replace(/[-_]questions?$/i, "");
+      $("params").style.display = "";
+      afficher();
+    } catch (err) {
+      msg(`<span class="warn">Impossible de lire le fichier : ${err.message}</span>`);
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+let questions = [];
+
+function afficher() {
+  if (!workbook) return;
+  const name = $("feuille").value;
+  const rows = XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, defval: "", raw: false });
+  questions = sheetToQuestions(rows);
+  const tb = $("tableau").querySelector("tbody");
+  tb.innerHTML = "";
+  if (!questions.length) {
+    $("apercu").style.display = "";
+    $("export").style.display = "none";
+    msg(`<span class="warn">Aucune question détectée dans « ${name} ». Vérifiez la ligne 1 (en-têtes Title, Correct, Choice…) et le format des lignes.</span>`);
+    tb.innerHTML = `<tr><td colspan="3" style="color:#a33">—</td></tr>`;
+    return;
+  }
+  const warns = [];
+  questions.forEach((q, i) => {
+    const tr = document.createElement("tr");
+    const props = q.choices.map((c, j) => `<div class="${j === q.correct ? "reponse" : ""}">${String.fromCharCode(65+j)}. ${escapeHtml(c)}${j === q.correct ? " ✔" : ""}</div>`).join("");
+    tr.innerHTML = `<td class="num">${i+1}${q.warn ? " <span class='warn'>⚠</span>" : ""}</td><td>${escapeHtml(q.title.length > 220 ? q.title.slice(0,220) + "…" : q.title)}${q.warn ? " <div class='warn'>Correct vide → 1re proposition</div>" : ""}</td><td>${props}</td>`;
+    tb.appendChild(tr);
+    if (q.warn) warns.push(i+1);
+  });
+  $("apercu").style.display = "";
+  $("export").style.display = "";
+  msg(`✅ ${questions.length} question${questions.length > 1 ? "s" : ""} prête${questions.length > 1 ? "s" : ""} à convertir` +
+      (warns.length ? ` — <span class="warn">attention : colonne « Correct » vide pour la${warns.length > 1 ? "s questions" : " question"} n° ${warns.join(", ")}</span>` : ""));
+}
+
+function generer() {
+  if (!questions.length) return;
+  const zip = new JSZip();
+  const qids = [];
+  questions.forEach((q, i) => {
+    const r = questionXml(i + 1, q.title, q.choices, q.correct);
+    qids.push(r.qid);
+    zip.file(r.qid + ".xml", r.xml);
+  });
+  zip.file("pool.xml", poolXml(qids, $("titre").value || "Banque de questions"));
+  const base = fichier.replace(/\.xlsx?$/i, "");
+  zip.generateAsync({ type: "blob", compression: "DEFLATE" }).then(blob => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = base + "-UNESS-QTI.zip";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    msg(`✅ Archive générée : <b>${base}-UNESS-QTI.zip</b> (${questions.length} questions). Importez-la dans UNESS via l'import QTI.`);
+  });
+}
+</script>
+</body>
+</html>
