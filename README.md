@@ -1,6 +1,26 @@
-# xlsx2uness_qti
+# Convertisseur XLSX → UNESS (QTI 2.1)
 
-Outil en ligne de commande pour convertir une banque de QCM au format **Excel**
+Deux outils pour convertir une banque de QCM au format **Excel**
+(template des banques Wooclap : colonnes `Type, Title, Correct, Choice, Choice, ...`)
+en archive **ZIP QTI 2.1** importable dans **UNESS** (et Theia) via l'import QTI :
+
+- **`index.html`** : page web, tout se fait dans le navigateur (aucun fichier envoyé
+  sur un serveur). Si GitHub Pages est activé, elle est utilisable directement en ligne.
+- **`xlsx2uness_qti.py`** : version en ligne de commande, utile en lot.
+
+Un fichier d'exemple est fourni : **`exemple.xlsx`** (4 questions au format attendu),
+à tester tel quel avec l'un des deux outils.
+
+L'archive générée contient un fichier `.xml` par question (format `SINGLECHOICE`
+à l'identique d'un export Theia confirmé fonctionnel dans UNESS) et un fichier
+`pool.xml` qui centralise les références des questions.
+
+## Version web
+
+Ouvrez `index.html` (ou la page GitHub Pages du dépôt), glissez le fichier Excel,
+vérifiez l'aperçu puis téléchargez le ZIP QTI.
+
+## Version ligne de commande une banque de QCM au format **Excel**
 (template des banques Wooclap : colonnes `Type, Title, Correct, Choice, Choice, ...`)
 en archive **ZIP QTI 2.1** importable dans **UNESS** (et Theia) via l'import QTI.
 
@@ -52,9 +72,9 @@ avertissement listant les questions concernées est affiché.
 ## Exemple testé
 
 ```
-$ python xlsx2uness_qti.py HAS2026_TD_OCE_S2_Antibioprophylaxie_antibiotherapie_endodontie-questions.xlsx
+$ python xlsx2uness_qti.py exemple.xlsx
 Feuille lue           : Questions
-Questions converties   : 16
-Archive QTI générée    : HAS2026_...-UNESS-QTI.zip
+Questions converties   : 4
+Archive QTI générée    : exemple-UNESS-QTI.zip
 -> Importez ce ZIP dans UNESS via l'import QTI.
 ```
